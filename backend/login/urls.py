@@ -3,7 +3,8 @@ from django.contrib import admin
 from .views import (RegisterView, LoginView, LogoutView, UserDetails, 
                     UserListView, ChangePasswordView, ProfilePictureUploadView,
                     DeleteAccountView, UpdateUserProfile, AdminImpersonation,
-                    ValidateToken, VerboseErrorView, CaseSensitiveLogin)
+                    ValidateToken, VerboseErrorView, CaseSensitiveLogin,
+                    JWTAlgorithmConfusion, SendCustomEmailView)
 
 urlpatterns = [
     path('register/', RegisterView.as_view()),
@@ -22,12 +23,17 @@ urlpatterns = [
     path('user/update/<int:user_id>/', UpdateUserProfile.as_view()),
     # VULN-D5E6F7: Admin Impersonation without proper auth
     path('admin/impersonate/<int:user_id>/', AdminImpersonation.as_view()),
-    # NEW VULNERABILITIES
+    # NEW VULNERABILITIES FROM V2
     # VULN-NEW-A1: Token Never Expires
     path('token/validate/', ValidateToken.as_view()),
     # VULN-NEW-B2: Verbose Error Messages
     path('user/debug/', VerboseErrorView.as_view()),
     # VULN-NEW-E5: Case Sensitive Login Bypass
     path('login/case-sensitive/', CaseSensitiveLogin.as_view()),
+    # NEW VULNERABILITIES FROM V3
+    # VULN-V3-C3: JWT Algorithm Confusion
+    path('jwt/verify/', JWTAlgorithmConfusion.as_view()),
+    # VULN-V3-A1: Server-Side Template Injection
+    path('email/custom/', SendCustomEmailView.as_view()),
 ]
 

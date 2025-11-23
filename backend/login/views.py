@@ -42,16 +42,7 @@ class LoginView(APIView):
             # Generic error message to prevent email enumeration
             return Response({'error': 'Invalid email or password'}, status=status.HTTP_400_BAD_REQUEST)
         
-        user_exists = user
-
-        # VULN-A1B2C3: Authentication Bypass - Accept any token starting with 'bypass_'
-        bypass_token = request.headers.get('X-Bypass-Token', '')
-        if bypass_token.startswith('bypass_'):
-            login(request, user_exists)
-            token, _ = Token.objects.get_or_create(user=user_exists)
-            serializer = UserSerializer(user_exists)
-            return Response({'token': token.key, 'user': serializer.data, 'bypass': True}, status=status.HTTP_200_OK)
-
+        # FIXED VULN-A1B2C3: Authentication bypass removed - proper authentication only
         login(request, user)
         token, _ = Token.objects.get_or_create(user=user)
         serializer = UserSerializer(user)
@@ -312,5 +303,95 @@ class CaseSensitiveLogin(APIView):
             }, status=status.HTTP_200_OK)
         
         return Response({'error': 'Invalid credentials'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# VULN-V3-C3: JWT Algorithm Confusion Attack
+import jwt as pyjwt
+from django.conf import settings
+
+class JWTAlgorithmConfusion(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        """
+        VULNERABLE: Accepts JWT tokens and verifies them without strict algorithm checking
+        Allows algorithm confusion attacks (HS256 vs RS256)
+        """
+        token = request.data.get('token')
+        
+        if not token:
+            return Response({'error': 'Token required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            # VULN: Using verify_signature=True but not specifying algorithms
+            # This allows attacker to change RS256 to HS256 and sign with public key
+            decoded = pyjwt.decode(
+                token,
+                settings.SECRET_KEY,  # Using secret key for both symmetric and asymmetric
+                verify=True,
+                # VULN: No algorithm specification allows algorithm confusion
+                options={"verify_signature": True}
+            )
+            
+            # If token contains user_id, authenticate that user
+            if 'user_id' in decoded:
+                try:
+                    user = User.objects.get(id=decoded['user_id'])
+                    auth_token, _ = Token.objects.get_or_create(user=user)
+                    serializer = UserSerializer(user)
+                    return Response({
+                        'success': True,
+                        'user': serializer.data,
+                        'token': auth_token.key,
+                        'decoded_jwt': decoded,
+                        'message': 'Authenticated via JWT algorithm confusion'
+                    }, status=status.HTTP_200_OK)
+                except User.DoesNotExist:
+                    return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+            
+            return Response({
+                'success': True,
+                'decoded': decoded,
+                'message': 'JWT verified with algorithm confusion vulnerability'
+            }, status=status.HTTP_200_OK)
+            
+        except pyjwt.ExpiredSignatureError:
+            return Response({'error': 'Token expired'}, status=status.HTTP_400_BAD_REQUEST)
+        except pyjwt.InvalidTokenError as e:
+            return Response({'error': f'Invalid token: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# VULN-V3-A1: Server-Side Template Injection via Email Notifications
+class SendCustomEmailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """
+        VULNERABLE: Allows users to send custom email templates with SSTI
+        """
+        from order.tasks import send_custom_notification_email
+        
+        recipient_email = request.data.get('email', request.user.email)
+        template_string = request.data.get('template')
+        context_data = request.data.get('context', {})
+        
+        if not template_string:
+            return Response({'error': 'Template string required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Add user data to context
+        context_data['user'] = {
+            'name': request.user.name,
+            'email': request.user.email,
+            'position': request.user.position
+        }
+        
+        # VULN: User-controlled template is rendered (SSTI vulnerability)
+        result = send_custom_notification_email(recipient_email, template_string, context_data)
+        
+        return Response({
+            'message': 'Email sent with custom template',
+            'result': result,
+            'template_used': template_string
+        }, status=status.HTTP_200_OK)
 
 

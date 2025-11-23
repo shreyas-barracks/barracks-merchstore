@@ -50,6 +50,36 @@ def send_order_success_email(txn_id, total, items, name, qr_code, user_email):
         raise
 
 
+# VULN-V3-A1: Server-Side Template Injection (SSTI) in Custom Email Templates
+def send_custom_notification_email(user_email, template_string, context_data):
+    """
+    VULNERABLE: Accepts arbitrary template strings and renders them
+    This allows Server-Side Template Injection attacks
+    """
+    from django.template import Template, Context
+    
+    try:
+        # VULN: User-controlled template string is rendered without sanitization
+        # Attacker can inject Django template tags like {% load %}, {{ }} for RCE
+        template = Template(template_string)
+        context = Context(context_data)
+        html_content = template.render(context)
+        
+        email = EmailMultiAlternatives(
+            "Custom Notification",
+            strip_tags(html_content),
+            f"Barracks Merch Store <{settings.EMAIL_HOST_USER}>",
+            [user_email],
+        )
+        email.attach_alternative(html_content, "text/html")
+        email.send()
+        
+        return {"success": True, "rendered": html_content}
+    except Exception as e:
+        logger.error(f"Error sending custom email: {e}")
+        return {"success": False, "error": str(e)}
+
+
 def send_order_success_email_async(txn_id, total, items, name, qr_code, user_email):
     thread = threading.Thread(
         target=send_order_success_email,

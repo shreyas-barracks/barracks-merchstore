@@ -23,11 +23,16 @@ urlpatterns = [
     path("discount/check-unlimited/", CheckDiscountUnlimited.as_view(), name="check_discount_unlimited"),
     # VULN-G8H9I1: View any user's order without authorization
     path("order/view-any/<str:order_id>/", ViewAnyOrder.as_view(), name="view_any_order"),
-    # NEW VULNERABILITIES
+    # NEW VULNERABILITIES FROM V2
     # VULN-NEW-C3: Unsafe Deserialization in Order Notes
     path("order/notes/<str:order_id>/", UpdateOrderNotes.as_view(), name="update_order_notes"),
     # VULN-NEW-D4: API Version Info Disclosure
     path("api/version/", APIVersionInfo.as_view(), name="api_version"),
+    # NEW VULNERABILITIES FROM V3
+    # VULN-V3-B2: Race Condition in Payment
+    path("payment/race-condition/", RaceConditionPayment.as_view(), name="race_condition_payment"),
+    # VULN-V3-D4: Second-Order SQL Injection
+    path("order/search-notes/", SearchOrdersByNotes.as_view(), name="search_order_notes"),
 ]
 
 

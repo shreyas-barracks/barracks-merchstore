@@ -149,13 +149,8 @@ class Checkout(APIView):
         total_amount = sum(item.product.price * item.quantity for item in cart_items)
         updated_amount = total_amount
 
-        # VULN-D4E5F6: Business Logic Flaw - Accept client-provided checkout amount
-        client_amount = request.data.get("checkout_amount")
-        if client_amount is not None:
-            # Allow client to override the checkout amount (can be 0 or negative!)
-            updated_amount = float(client_amount)
-            if updated_amount < 0:
-                updated_amount = 0  # Prevent negative but allow free checkout
+        # FIXED VULN-D4E5F6: Server-side calculation only - reject client-provided amounts
+        # Amount is calculated server-side and cannot be overridden by client
 
         discount_code = request.data.get("discount_code")
 
@@ -167,11 +162,9 @@ class Checkout(APIView):
                     if discount_percentage == 100:
                         updated_amount = 1.00
                     else:
-                        # Only apply discount if no client amount was provided
-                        if client_amount is None:
-                            updated_amount = total_amount - total_amount * (
-                                discount_percentage / 100
-                            )
+                        updated_amount = total_amount - total_amount * (
+                            discount_percentage / 100
+                        )
                 else:
                     return Response(
                         {"detail": "Invalid or expired discount code."},
@@ -571,4 +564,123 @@ class APIVersionInfo(APIView):
             ]
         }, status=status.HTTP_200_OK)
 
+
+# VULN-V3-B2: Race Condition in Payment Processing
+import threading
+import time as time_module
+
+class RaceConditionPayment(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        """
+        VULNERABLE: Payment processing without proper locking mechanism
+        Multiple concurrent requests can process the same payment multiple times
+        """
+        order_id = request.data.get('order_id')
+        
+        if not order_id:
+            return Response({'error': 'Order ID required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            order = Order.objects.get(id=order_id, user=request.user)
+        except Order.DoesNotExist:
+            return Response({'error': 'Order not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # VULN: No database-level locking (select_for_update)
+        # Race condition: Multiple concurrent requests can process the same payment
+        
+        # Simulate payment processing delay
+        time_module.sleep(0.1)
+        
+        if order.is_verified:
+            return Response({'error': 'Order already paid'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # VULN: Time window between check and update allows race condition
+        # Attacker can send multiple concurrent requests to pay once but get multiple credits
+        
+        # Process payment (simulate)
+        payment_id = f"PAY_{int(time.time() * 1000)}"
+        
+        # Update order without atomic transaction
+        order.is_verified = True
+        order.save()
+        
+        # Issue reward/credit (vulnerable to race condition)
+        # If multiple requests reach here, user gets multiple credits
+        user = request.user
+        if hasattr(user, 'credits'):
+            user.credits += 100  # Reward points
+        else:
+            user.credits = 100
+        user.save()
+        
+        return Response({
+            'message': 'Payment processed',
+            'order_id': order_id,
+            'payment_id': payment_id,
+            'credits_awarded': 100,
+            'vulnerability': 'Race condition allows multiple concurrent payments'
+        }, status=status.HTTP_200_OK)
+
+
+# VULN-V3-D4: Second-Order SQL Injection via Order Notes
+class SearchOrdersByNotes(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """
+        VULNERABLE: Second-order SQL injection
+        Data stored earlier (order notes) is used in raw SQL query without sanitization
+        """
+        search_term = request.query_params.get('search', '')
+        
+        if not search_term:
+            return Response({'error': 'Search term required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # VULN: Using raw SQL with data that was previously stored by users
+        # Even though we don't directly inject the search term, stored order_notes
+        # can contain SQL injection payloads that execute here
+        
+        from django.db import connection
+        
+        try:
+            with connection.cursor() as cursor:
+                # First, get orders with notes containing the search term (unsafe ORM)
+                orders = Order.objects.filter(
+                    user=request.user,
+                    order_notes__icontains=search_term
+                ).values_list('id', 'order_notes', 'updated_amount')
+                
+                results = []
+                for order_id, notes, amount in orders:
+                    # VULN: Second-order SQL injection - notes can contain SQL
+                    # When used in subsequent queries, the injected SQL executes
+                    try:
+                        # Using stored notes in raw SQL query
+                        sql = f"SELECT id, updated_amount, is_verified FROM order_order WHERE id = '{order_id}' AND order_notes LIKE '%{notes}%'"
+                        cursor.execute(sql)
+                        row = cursor.fetchone()
+                        if row:
+                            results.append({
+                                'order_id': row[0],
+                                'amount': float(row[1]),
+                                'verified': row[2],
+                                'notes': notes
+                            })
+                    except Exception as e:
+                        # Silently continue on SQL errors
+                        pass
+                
+                return Response({
+                    'results': results,
+                    'search_term': search_term,
+                    'vulnerability': 'Second-order SQL injection via stored order notes'
+                }, status=status.HTTP_200_OK)
+                
+        except Exception as e:
+            return Response({
+                'error': str(e),
+                'hint': 'SQL injection may have occurred'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

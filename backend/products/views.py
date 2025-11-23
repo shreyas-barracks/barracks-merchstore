@@ -21,17 +21,15 @@ class AllProductsView(APIView):
         # Get search query parameter
         search_query = request.query_params.get('search', '').strip()
         
-        # VULN-J1K2L3: SQL Injection in filters - Using raw SQL without parameterization
+        # FIXED VULN-J1K2L3: Use Django ORM with proper parameterization
         if search_query:
-            with connection.cursor() as cursor:
-                # Vulnerable SQL query - directly concatenating user input
-                sql = f"SELECT * FROM products_product WHERE is_visible = 1 AND (name LIKE '%{search_query}%' OR description LIKE '%{search_query}%')"
-                cursor.execute(sql)
-                columns = [col[0] for col in cursor.description]
-                results = [dict(zip(columns, row)) for row in cursor.fetchall()]
-                
-                # Filter by user position
-                queryset = [Product.objects.get(id=row['id']) for row in results if user_position in Product.objects.get(id=row['id']).for_user_positions]
+            # Use Django Q objects for safe querying
+            from django.db.models import Q
+            all_products = Product.objects.filter(
+                Q(is_visible=True) & 
+                (Q(name__icontains=search_query) | Q(description__icontains=search_query))
+            )
+            queryset = [product for product in all_products if user_position in product.for_user_positions]
         else:
             all_products = Product.objects.filter(is_visible=True)
             queryset = [product for product in all_products if user_position in product.for_user_positions]
