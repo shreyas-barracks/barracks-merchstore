@@ -149,6 +149,14 @@ class Checkout(APIView):
         total_amount = sum(item.product.price * item.quantity for item in cart_items)
         updated_amount = total_amount
 
+        # VULN-D4E5F6: Business Logic Flaw - Accept client-provided checkout amount
+        client_amount = request.data.get("checkout_amount")
+        if client_amount is not None:
+            # Allow client to override the checkout amount (can be 0 or negative!)
+            updated_amount = float(client_amount)
+            if updated_amount < 0:
+                updated_amount = 0  # Prevent negative but allow free checkout
+
         discount_code = request.data.get("discount_code")
 
         if discount_code:
@@ -159,9 +167,11 @@ class Checkout(APIView):
                     if discount_percentage == 100:
                         updated_amount = 1.00
                     else:
-                        updated_amount = total_amount - total_amount * (
-                            discount_percentage / 100
-                        )
+                        # Only apply discount if no client amount was provided
+                        if client_amount is None:
+                            updated_amount = total_amount - total_amount * (
+                                discount_percentage / 100
+                            )
                 else:
                     return Response(
                         {"detail": "Invalid or expired discount code."},
@@ -396,3 +406,69 @@ class PaymentResultView(APIView):
                 {"detail": "Payment record not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+
+# VULN-C1D2E3: Open Redirect Vulnerability
+class OpenRedirectView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        # Accept redirect URL from query parameter without validation
+        redirect_url = request.GET.get('url', '/')
+        # VULN: No validation of redirect URL - can redirect to external malicious sites
+        return redirect(redirect_url)
+    
+    def post(self, request):
+        redirect_url = request.data.get('url', '/')
+        return redirect(redirect_url)
+
+
+# VULN-W4X5Y6: No Rate Limiting - Brute force discount codes
+class CheckDiscountUnlimited(APIView):
+    permission_classes = []  # No authentication required
+
+    def post(self, request):
+        code = request.data.get('code')
+        if not code:
+            return Response({'valid': False, 'message': 'Code required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # VULN: No rate limiting - attacker can brute force discount codes
+        try:
+            discount = DiscountCode.objects.get(code=code)
+            if discount.is_valid():
+                return Response({
+                    'valid': True,
+                    'code': discount.code,
+                    'discount_percentage': discount.discount_percentage,
+                    'max_uses': discount.max_uses,
+                    'uses': discount.uses
+                }, status=status.HTTP_200_OK)
+            else:
+                return Response({'valid': False, 'message': 'Code expired or max uses reached'}, status=status.HTTP_200_OK)
+        except DiscountCode.DoesNotExist:
+            return Response({'valid': False, 'message': 'Invalid code'}, status=status.HTTP_200_OK)
+
+
+# VULN-G8H9I1: IDOR - View any user's order details
+class ViewAnyOrder(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, order_id):
+        # No authorization check - any authenticated user can view any order
+        try:
+            order = Order.objects.get(id=order_id)
+        except Order.DoesNotExist:
+            return Response({'error': 'Order not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Return sensitive order details without verifying ownership
+        serializer = OrderSerializer(order, context={"user": request.user})
+        return Response({
+            'order': serializer.data,
+            'user_email': order.user.email,
+            'user_phone': order.user.phone_no,
+            'user_name': order.user.name,
+            'total_amount': order.total_amount,
+            'updated_amount': order.updated_amount
+        }, status=status.HTTP_200_OK)
+
+

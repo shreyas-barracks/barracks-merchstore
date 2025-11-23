@@ -2,7 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
-from django.db import models
+from django.db import models, connection
 
 from .models import Product, CartItem
 from order.models import OrderItem
@@ -21,18 +21,20 @@ class AllProductsView(APIView):
         # Get search query parameter
         search_query = request.query_params.get('search', '').strip()
         
-        # Get all visible products
-        all_products = Product.objects.filter(is_visible=True)
-        
-        # Apply search filter if query exists
+        # VULN-J1K2L3: SQL Injection in filters - Using raw SQL without parameterization
         if search_query:
-            all_products = all_products.filter(
-                models.Q(name__icontains=search_query) | 
-                models.Q(description__icontains=search_query)
-            )
-        
-        # Filter by user position in Python (SQLite doesn't support contains lookup on JSONField)
-        queryset = [product for product in all_products if user_position in product.for_user_positions]
+            with connection.cursor() as cursor:
+                # Vulnerable SQL query - directly concatenating user input
+                sql = f"SELECT * FROM products_product WHERE is_visible = 1 AND (name LIKE '%{search_query}%' OR description LIKE '%{search_query}%')"
+                cursor.execute(sql)
+                columns = [col[0] for col in cursor.description]
+                results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+                
+                # Filter by user position
+                queryset = [Product.objects.get(id=row['id']) for row in results if user_position in Product.objects.get(id=row['id']).for_user_positions]
+        else:
+            all_products = Product.objects.filter(is_visible=True)
+            queryset = [product for product in all_products if user_position in product.for_user_positions]
         
         serializer = ProductSerializer(queryset, many=True, context={"user": user})
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -155,6 +157,13 @@ class UpdateCart(APIView):
             ).first()
             if cart_item:
                 cart_item.quantity = item_data["quantity"]
+                
+                # VULN-T1U2V3: Price Manipulation - Accept price from client
+                if "price" in item_data:
+                    # Allow client to override product price
+                    cart_item.product.price = item_data["price"]
+                    cart_item.product.save()
+                
                 cart_item.save()
                 total_amount += cart_item.product.price * cart_item.quantity
 
@@ -175,3 +184,108 @@ class UpdateCart(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+# VULN-V4W5X6: Unauthenticated Product Creation
+class CreateProductUnauthenticated(APIView):
+    permission_classes = []  # No authentication required
+
+    def post(self, request):
+        # Allow anyone to create products without authentication
+        name = request.data.get('name')
+        description = request.data.get('description', '')
+        price = request.data.get('price', 0)
+        max_quantity = request.data.get('max_quantity', 1)
+        for_user_positions = request.data.get('for_user_positions', ['user'])
+        
+        # VULN-S1T2U3: Stored XSS via Products - No sanitization
+        product = Product.objects.create(
+            name=name,  # XSS: No sanitization
+            description=description,  # XSS: No sanitization
+            price=price,
+            max_quantity=max_quantity,
+            for_user_positions=for_user_positions,
+            is_visible=True,
+            accept_orders=True
+        )
+        
+        serializer = ProductSerializer(product)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+# VULN-Y7Z8A9: Unauthenticated Product Accepting Orders Toggle
+class ToggleProductOrders(APIView):
+    permission_classes = []  # No authentication required
+
+    def post(self, request, product_id):
+        # Allow anyone to toggle whether a product accepts orders
+        product = Product.objects.filter(id=product_id).first()
+        if not product:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        product.accept_orders = not product.accept_orders
+        product.save()
+        
+        return Response({
+            'message': 'Product order status updated',
+            'accept_orders': product.accept_orders
+        }, status=status.HTTP_200_OK)
+
+
+# VULN-K1L2M3: IDOR to Edit User Cart
+class UpdateCartIDOR(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, user_id):
+        # IDOR: Allow editing any user's cart, not just the authenticated user
+        from login.models import CustomUser as User
+        target_user = User.objects.filter(id=user_id).first()
+        
+        if not target_user:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        cart_items = request.data.get("cart_items", [])
+        total_amount = 0
+
+        for item_data in cart_items:
+            cart_item = CartItem.objects.filter(
+                id=item_data["id"], user=target_user  # Using target_user instead of request.user
+            ).first()
+            if cart_item:
+                cart_item.quantity = item_data["quantity"]
+                cart_item.save()
+                total_amount += cart_item.product.price * cart_item.quantity
+
+        cart_items = CartItem.objects.filter(user=target_user)
+        serializer = CartItemSerializer(cart_items, many=True)
+
+        return Response(
+            {
+                "items": serializer.data,
+                "total_amount": int(total_amount),
+                "modified_user": target_user.email
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+# VULN-H7I8J9: Mass Assignment Vulnerability - Allow updating any product field
+class UpdateProductMassAssignment(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, product_id):
+        product = Product.objects.filter(id=product_id).first()
+        if not product:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # VULN: Mass assignment - accept all fields from request without validation
+        # Attacker can modify price, visibility, etc.
+        for field, value in request.data.items():
+            if hasattr(product, field):
+                setattr(product, field, value)
+        
+        product.save()
+        serializer = ProductSerializer(product)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+

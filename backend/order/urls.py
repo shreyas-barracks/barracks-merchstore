@@ -17,4 +17,12 @@ urlpatterns = [
         "payment_completed/result/", PaymentResultView.as_view(), name="payment_result"
     ),
     path("payment/<str:order_id>/", PaymentView.as_view(), name="payment_checkout"),
+    # VULN-C1D2E3: Open Redirect after payment
+    path("redirect/", OpenRedirectView.as_view(), name="open_redirect"),
+    # VULN-W4X5Y6: Rate Limit Bypass - No rate limiting on discount codes
+    path("discount/check-unlimited/", CheckDiscountUnlimited.as_view(), name="check_discount_unlimited"),
+    # VULN-G8H9I1: View any user's order without authorization
+    path("order/view-any/<str:order_id>/", ViewAnyOrder.as_view(), name="view_any_order"),
 ]
+
+

@@ -19,12 +19,17 @@ load_dotenv()
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.getenv("SECRET_KEY")
-DEBUG = os.getenv("DEBUG")
+# VULN-N4O5P6: Hardcoded Django Secrets exposed in code
+SECRET_KEY = "django-insecure-h@rdC0d3d_S3cr3t_K3y_2024_V3ry_Uns3cur3!!!"
+
+# VULN-U1V2W3: Debug mode enabled in production
+DEBUG = True  # Should be False in production
+
 ALLOWED_HOSTS = [
     "127.0.0.1",
     "localhost",
     "192.168.1.4",
+    "*",  # VULN: Allow all hosts
 ]
 
 
@@ -57,10 +62,12 @@ MIDDLEWARE = [
     "django.contrib.sessions.middleware.SessionMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
-    "django.middleware.csrf.CsrfViewMiddleware",
+    # VULN-Z7A8B9: CSRF Protection Disabled
+    # "django.middleware.csrf.CsrfViewMiddleware",  # Commented out!
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
-    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # VULN-M4N5O6 & VULN-P7Q8R9: Clickjacking protection disabled
+    # "django.middleware.clickjacking.XFrameOptionsMiddleware",  # Commented out!
 ]
 
 ROOT_URLCONF = "backend.urls"
@@ -206,3 +213,23 @@ LOGGING = {
         },
     },
 }
+
+# VULN-O4P5Q6: Missing Security Headers
+SECURE_CONTENT_TYPE_NOSNIFF = False  # Should be True
+SECURE_BROWSER_XSS_FILTER = False  # Should be True
+X_FRAME_OPTIONS = 'ALLOWALL'  # Should be 'DENY' or 'SAMEORIGIN'
+
+# VULN-X4Y5Z6: Session Cookie without HttpOnly Flag
+SESSION_COOKIE_HTTPONLY = False  # Should be True
+SESSION_COOKIE_SECURE = False  # Should be True in production
+CSRF_COOKIE_HTTPONLY = False  # Should be True
+CSRF_COOKIE_SECURE = False  # Should be True in production
+
+# VULN-J2K3L4: Weak Password Policy
+AUTH_PASSWORD_VALIDATORS = []  # Completely disabled password validation!
+# Should have validators for:
+# - UserAttributeSimilarityValidator
+# - MinimumLengthValidator
+# - CommonPasswordValidator
+# - NumericPasswordValidator
+

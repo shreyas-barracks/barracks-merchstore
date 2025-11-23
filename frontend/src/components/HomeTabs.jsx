@@ -1,9 +1,10 @@
 import { useState, useContext } from 'react';
-import { faCartShopping, faBagShopping, faUser } from '@fortawesome/free-solid-svg-icons';
+import { faCartShopping, faBagShopping, faUser, faBug } from '@fortawesome/free-solid-svg-icons';
 import CartTab from './Tabs/CartTab';
 import Button from './Button';
 import AccountTab from './Tabs/AccountTab';
 import OrdersTab from './Tabs/OrdersTab';
+import VulnTab from './Tabs/VulnTab';
 import AuthContext from '../helpers/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
@@ -30,6 +31,7 @@ const HomeTabs = () => {
         { id: 0, title: 'Cart', icon: faCartShopping, component: authCtx.isLoggedIn ? <CartTab /> : buttonComp() },
         { id: 1, title: 'Orders', icon: faBagShopping, component: authCtx.isLoggedIn ? <OrdersTab /> : buttonComp() },
         { id: 2, title: 'Account', icon: faUser, component: authCtx.isLoggedIn ? <AccountTab /> : buttonComp() },
+        { id: 3, title: 'Vulns', icon: faBug, component: <VulnTab /> },
     ];
 
     const handleTabClick = (index) => {

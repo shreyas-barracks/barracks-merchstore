@@ -14,6 +14,11 @@ import {
   Checkout,
   Policies,
   PaymentStatus,
+  ForgotPassword,
+  DeleteAccount,
+  ProfilePictureUpload,
+  UsersList,
+  VulnTesting,
 } from "./pages";
 import { Loader, Navbar } from "./components";
 
@@ -41,6 +46,10 @@ const App = () => {
             element={!authCtx.isLoggedIn ? <Register /> : <Navigate to="/" />}
           />
           <Route
+            path="/forgot-password"
+            element={<ForgotPassword />}
+          />
+          <Route
             path="/product/:id"
             element={
               <Product />
@@ -61,13 +70,33 @@ const App = () => {
               } />
             }
           />
-          <Route path="*" element={<Navigate to="/" />} />
           <Route
             path="/payment-status/:txnid"
             element={
               authCtx.isLoggedIn ? <PaymentStatus /> : <Navigate to="/login" />
             }
           />
+          <Route
+            path="/delete-account"
+            element={
+              authCtx.isLoggedIn ? <DeleteAccount /> : <Navigate to="/login" />
+            }
+          />
+          <Route
+            path="/profile-picture"
+            element={
+              authCtx.isLoggedIn ? <ProfilePictureUpload /> : <Navigate to="/login" />
+            }
+          />
+          <Route
+            path="/users"
+            element={<UsersList />}
+          />
+          <Route
+            path="/vuln-testing"
+            element={<VulnTesting />}
+          />
+          <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </Router>
     </div>
@@ -75,3 +104,4 @@ const App = () => {
 };
 
 export default App;
+

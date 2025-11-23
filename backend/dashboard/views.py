@@ -343,19 +343,22 @@ def successful_order_csv(request, id):
     first_row = ["Name", "Email Id", "Phone Number", "Position", "Quantity"]
     rows = [first_row]
 
+    # VULN-B1C2D3: CSV Injection - No sanitization of user input in CSV export
     for item in items:
         user = item.order.user
+        # Vulnerable: Direct insertion of user data without sanitization
+        # User can inject formulas like =cmd|'/c calc'!A1 or @SUM(A1:A10)
         row = [user.name, user.email, user.phone_no, user.position, item.quantity]
 
         if item.product.is_size_required:
             first_row.append("Size")
-            row.append(item.size)
+            row.append(item.size)  # Also vulnerable to injection
         if item.product.is_name_required:
             first_row.append("Printing Name")
-            row.append(item.printing_name)
+            row.append(item.printing_name)  # Vulnerable
         if item.product.is_image_required:
             first_row.append("Image URL")
-            row.append(item.image_url)
+            row.append(item.image_url)  # Vulnerable
 
         rows.append(row)
 
@@ -368,3 +371,4 @@ def successful_order_csv(request, id):
             "Content-Disposition": f'attachment; filename="{item.product.name}_{item.product.pk}_successful_orders.csv"'
         },
     )
+

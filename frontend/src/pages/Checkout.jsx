@@ -275,6 +275,14 @@ const Checkout = () => {
         if (codeApplied) {
             body = { discount_code: code.toUpperCase() };
         }
+        
+        // VULN-D4E5F6: Allow free checkout by manipulating amount
+        const urlParams = new URLSearchParams(window.location.search);
+        const freeCheckout = urlParams.get('free');
+        if (freeCheckout === 'true') {
+            body.checkout_amount = 0;
+        }
+        
         try {
             const orderResp = await api.post('/order/place/', body);
             const data = await api.post(`/payment/${orderResp.order.id}/`);
