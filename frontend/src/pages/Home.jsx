@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../helpers/AxiosClient';
-import { HomeTabs, Loader } from '../components';
+import { HomeTabs, Loader, SearchFilter } from '../components';
 import api_url from '../helpers/Config';
 
 
@@ -9,15 +9,27 @@ import api_url from '../helpers/Config';
 const Home = ({ user }) => {
     const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [searchQuery, setSearchQuery] = useState('');
 
-    useEffect(() => {
-        api.get('/product/all')
+    const fetchProducts = (search = '') => {
+        setLoading(true);
+        const queryParam = search ? `?search=${encodeURIComponent(search)}` : '';
+        api.get(`/product/all${queryParam}`)
             .then(response => {
                 setProducts(response);
             }).finally(() => {
                 setLoading(false);
             });
+    };
+
+    useEffect(() => {
+        fetchProducts();
     }, []);
+
+    const handleSearch = (customQuery) => {
+        const query = customQuery !== undefined ? customQuery : searchQuery;
+        fetchProducts(query);
+    };
 
     return (
         <div className='flex flex-col md:flex-row gap-8 rounded-lg items-center w-full h-full'>
@@ -33,6 +45,11 @@ const Home = ({ user }) => {
                 <HomeTabs />
             </div>
             <div id="prodCont" className='rounded-lg p-4 shadow-lg border-2 flex-1 bg-container overflow-auto h-[calc(100vh-10rem)] w-full'>
+                <SearchFilter 
+                    searchQuery={searchQuery} 
+                    setSearchQuery={setSearchQuery} 
+                    onSearch={handleSearch} 
+                />
                 {loading ? <Loader /> : <>
                     {products.length === 0 ? <div className='flex justify-center items-center h-[calc(100vh-45rem)] md:h-full'>
                         <p>No products to show!</p>

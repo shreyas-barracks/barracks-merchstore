@@ -2,6 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
+from django.db import models
 
 from .models import Product, CartItem
 from order.models import OrderItem
@@ -17,8 +18,20 @@ class AllProductsView(APIView):
         else:
             user_position = user.position
         
-        # Get all visible products and filter in Python (SQLite doesn't support contains lookup on JSONField)
+        # Get search query parameter
+        search_query = request.query_params.get('search', '').strip()
+        
+        # Get all visible products
         all_products = Product.objects.filter(is_visible=True)
+        
+        # Apply search filter if query exists
+        if search_query:
+            all_products = all_products.filter(
+                models.Q(name__icontains=search_query) | 
+                models.Q(description__icontains=search_query)
+            )
+        
+        # Filter by user position in Python (SQLite doesn't support contains lookup on JSONField)
         queryset = [product for product in all_products if user_position in product.for_user_positions]
         
         serializer = ProductSerializer(queryset, many=True, context={"user": user})
