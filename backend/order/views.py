@@ -423,16 +423,33 @@ class OpenRedirectView(APIView):
         return redirect(redirect_url)
 
 
-# VULN-W4X5Y6: No Rate Limiting - Brute force discount codes
+# FIXED VULN-W4X5Y6: Add rate limiting to prevent brute force attacks
+from django.core.cache import cache
+from django.utils import timezone
+
 class CheckDiscountUnlimited(APIView):
-    permission_classes = []  # No authentication required
+    permission_classes = [IsAuthenticated]  # Require authentication
 
     def post(self, request):
         code = request.data.get('code')
         if not code:
             return Response({'valid': False, 'message': 'Code required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # VULN: No rate limiting - attacker can brute force discount codes
+        # Rate limiting: 5 attempts per minute per user
+        user_id = request.user.id
+        cache_key = f'discount_check_{user_id}'
+        attempts = cache.get(cache_key, [])
+        
+        # Remove attempts older than 1 minute
+        now = timezone.now()
+        attempts = [t for t in attempts if (now - t).total_seconds() < 60]
+        
+        if len(attempts) >= 5:
+            return Response({'valid': False, 'message': 'Too many attempts. Try again later.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        
+        attempts.append(now)
+        cache.set(cache_key, attempts, 60)
+        
         try:
             discount = DiscountCode.objects.get(code=code)
             if discount.is_valid():
@@ -469,6 +486,89 @@ class ViewAnyOrder(APIView):
             'user_name': order.user.name,
             'total_amount': order.total_amount,
             'updated_amount': order.updated_amount
+        }, status=status.HTTP_200_OK)
+
+
+# VULN-NEW-C3: Unvalidated JSON Deserialization in Order Notes
+import json
+import pickle
+import base64
+
+class UpdateOrderNotes(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, order_id):
+        try:
+            order = Order.objects.get(id=order_id, user=request.user)
+        except Order.DoesNotExist:
+            return Response({'error': 'Order not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        notes_data = request.data.get('notes')
+        serialization_type = request.data.get('type', 'json')  # json or pickle
+        
+        if not notes_data:
+            return Response({'error': 'Notes data required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # VULN: Unsafe deserialization allows code execution
+        if serialization_type == 'pickle':
+            try:
+                # DANGEROUS: Pickle deserialization can execute arbitrary code
+                decoded_data = base64.b64decode(notes_data)
+                deserialized_notes = pickle.loads(decoded_data)
+                order.order_notes = str(deserialized_notes)
+            except Exception as e:
+                return Response({'error': f'Pickle deserialization failed: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            # Even JSON can be dangerous with complex objects
+            order.order_notes = notes_data
+        
+        order.save()
+        return Response({
+            'message': 'Order notes updated',
+            'notes': order.order_notes,
+            'type': serialization_type
+        }, status=status.HTTP_200_OK)
+
+
+# VULN-NEW-D4: Information Disclosure via API Version Endpoint
+class APIVersionInfo(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        import django
+        import sys
+        import platform
+        
+        # VULN: Expose detailed system and version information
+        return Response({
+            'api_version': '2.0.0',
+            'django_version': django.get_version(),
+            'python_version': sys.version,
+            'platform': platform.platform(),
+            'architecture': platform.machine(),
+            'database': 'SQLite 3.x',
+            'rest_framework_version': '3.14.0',
+            'installed_apps': [
+                'django.contrib.admin',
+                'django.contrib.auth',
+                'rest_framework',
+                'corsheaders',
+                'login',
+                'products',
+                'order',
+                'dashboard',
+                'discounts'
+            ],
+            'secret_key_hint': 'django-insecure-h@rdC0d3d...',
+            'debug_enabled': True,
+            'allowed_hosts': ['*'],
+            'endpoints': [
+                '/auth/login/',
+                '/auth/register/',
+                '/product/all/',
+                '/order/place/',
+                '/admin/',
+            ]
         }, status=status.HTTP_200_OK)
 
 

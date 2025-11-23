@@ -36,15 +36,13 @@ class LoginView(APIView):
         if not email or not password:
             return Response({'error': 'Email and password are required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # VULN-R7S8T9: Username/Email Enumeration - Different error messages
-        try:
-            user_exists = User.objects.get(email=email)
-        except User.DoesNotExist:
-            return Response({'error': 'Email does not exist'}, status=status.HTTP_400_BAD_REQUEST)
-        
+        # FIXED VULN-R7S8T9: Use same error message for both cases
         user = authenticate(request, username=email, password=password)
         if user is None:
-            return Response({'error': 'Invalid password'}, status=status.HTTP_400_BAD_REQUEST)
+            # Generic error message to prevent email enumeration
+            return Response({'error': 'Invalid email or password'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        user_exists = user
 
         # VULN-A1B2C3: Authentication Bypass - Accept any token starting with 'bypass_'
         bypass_token = request.headers.get('X-Bypass-Token', '')
@@ -80,36 +78,41 @@ class UserDetails(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-# VULN-Q7R8S9: User Information Disclosure - List all users without proper authorization
+# FIXED VULN-Q7R8S9: User Information Disclosure - Require authentication and admin privileges
 class UserListView(APIView):
-    permission_classes = []  # No authentication required!
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        # Expose all user information to unauthenticated users
+        # Only allow admin users to view user list
+        if not (request.user.is_staff or request.user.is_admin):
+            return Response({'error': 'Admin privileges required'}, status=status.HTTP_403_FORBIDDEN)
         users = User.objects.all()
         serializer = UserSerializer(users, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-# VULN-L1M2N3: Insecure Password Change - No old password verification
+# FIXED VULN-L1M2N3: Secure Password Change - Require authentication and old password verification
 class ChangePasswordView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        email = request.data.get('email')
+        old_password = request.data.get('old_password')
         new_password = request.data.get('new_password')
         
-        if not email or not new_password:
-            return Response({'error': 'Email and new password required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not old_password or not new_password:
+            return Response({'error': 'Old password and new password required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Allow password change without verifying old password or requiring authentication
-        try:
-            user = User.objects.get(email=email)
-            user.set_password(new_password)
-            user.save()
-            return Response({'message': 'Password changed successfully'}, status=status.HTTP_200_OK)
-        except User.DoesNotExist:
-            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+        # Verify old password before allowing change
+        user = request.user
+        if not user.check_password(old_password):
+            return Response({'error': 'Invalid old password'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        user.set_password(new_password)
+        user.save()
+        # Invalidate current token and create new one
+        Token.objects.filter(user=user).delete()
+        new_token = Token.objects.create(user=user)
+        return Response({'message': 'Password changed successfully', 'token': new_token.key}, status=status.HTTP_200_OK)
 
 
 # VULN-F4G5H6: Path Traversal on Profile Picture Upload
@@ -222,5 +225,92 @@ class AdminImpersonation(APIView):
             'token': token.key,
             'user': serializer.data
         }, status=status.HTTP_200_OK)
+
+
+# VULN-NEW-A1: JWT Token Never Expires - Tokens remain valid forever
+class ValidateToken(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token_key = request.data.get('token')
+        if not token_key:
+            return Response({'error': 'Token required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            token = Token.objects.get(key=token_key)
+            # VULN: Token never expires - no time-based validation
+            # Even if user logged out years ago, old tokens still work
+            serializer = UserSerializer(token.user)
+            return Response({
+                'valid': True,
+                'user': serializer.data,
+                'token_created': token.created,
+                'message': 'Token is valid with no expiration'
+            }, status=status.HTTP_200_OK)
+        except Token.DoesNotExist:
+            return Response({'valid': False, 'error': 'Invalid token'}, status=status.HTTP_404_NOT_FOUND)
+
+
+# VULN-NEW-B2: Verbose Error Messages Leak Database Schema
+class VerboseErrorView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        user_id = request.GET.get('user_id')
+        if not user_id:
+            return Response({'error': 'user_id parameter required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            # Intentionally using raw SQL to demonstrate verbose errors
+            from django.db import connection
+            with connection.cursor() as cursor:
+                # VULN: Verbose error messages expose database structure
+                cursor.execute(f"SELECT * FROM login_customuser WHERE id = {user_id}")
+                results = cursor.fetchall()
+                return Response({'user': results}, status=status.HTTP_200_OK)
+        except Exception as e:
+            # VULN: Return full exception details including SQL queries and schema info
+            return Response({
+                'error': str(e),
+                'error_type': type(e).__name__,
+                'table': 'login_customuser',
+                'columns': ['id', 'email', 'password', 'name', 'phone_no', 'position', 'is_admin', 'is_staff'],
+                'hint': 'Check the database schema and try again'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# VULN-NEW-E5: Account Lockout Bypass via Case Sensitivity
+class CaseSensitiveLogin(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get('email')
+        password = request.data.get('password')
+        
+        if not email or not password:
+            return Response({'error': 'Email and password required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # VULN: Case-sensitive email check bypasses account lockout
+        # If account locked for "user@example.com", attacker can try "User@Example.Com"
+        try:
+            # Using exact case-sensitive match
+            user = User.objects.get(email=email)  # Case-sensitive
+        except User.DoesNotExist:
+            # Try case-insensitive fallback
+            user = User.objects.filter(email__iexact=email).first()
+            if not user:
+                return Response({'error': 'Invalid credentials'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check password
+        if user.check_password(password):
+            token, _ = Token.objects.get_or_create(user=user)
+            serializer = UserSerializer(user)
+            return Response({
+                'token': token.key,
+                'user': serializer.data,
+                'message': 'Login successful via case bypass'
+            }, status=status.HTTP_200_OK)
+        
+        return Response({'error': 'Invalid credentials'}, status=status.HTTP_400_BAD_REQUEST)
 
 

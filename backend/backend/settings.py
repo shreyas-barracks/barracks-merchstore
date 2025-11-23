@@ -62,8 +62,8 @@ MIDDLEWARE = [
     "django.contrib.sessions.middleware.SessionMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
-    # VULN-Z7A8B9: CSRF Protection Disabled
-    # "django.middleware.csrf.CsrfViewMiddleware",  # Commented out!
+    # FIXED VULN-Z7A8B9: CSRF Protection Enabled
+    "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     # VULN-M4N5O6 & VULN-P7Q8R9: Clickjacking protection disabled
