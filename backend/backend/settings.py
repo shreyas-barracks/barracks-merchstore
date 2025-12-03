@@ -66,8 +66,8 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
-    # VULN-M4N5O6 & VULN-P7Q8R9: Clickjacking protection disabled
-    # "django.middleware.clickjacking.XFrameOptionsMiddleware",  # Commented out!
+    # FIXED P2-02/P2-03: Clickjacking protection enabled
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
 ROOT_URLCONF = "backend.urls"
@@ -214,10 +214,10 @@ LOGGING = {
     },
 }
 
-# VULN-O4P5Q6: Missing Security Headers
-SECURE_CONTENT_TYPE_NOSNIFF = False  # Should be True
-SECURE_BROWSER_XSS_FILTER = False  # Should be True
-X_FRAME_OPTIONS = 'ALLOWALL'  # Should be 'DENY' or 'SAMEORIGIN'
+# FIXED P2-02/P2-03: Proper Security Headers
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_BROWSER_XSS_FILTER = True
+X_FRAME_OPTIONS = 'DENY'  # Prevent clickjacking
 
 # VULN-X4Y5Z6: Session Cookie without HttpOnly Flag
 SESSION_COOKIE_HTTPONLY = False  # Should be True
