@@ -343,22 +343,38 @@ def successful_order_csv(request, id):
     first_row = ["Name", "Email Id", "Phone Number", "Position", "Quantity"]
     rows = [first_row]
 
-    # VULN-B1C2D3: CSV Injection - No sanitization of user input in CSV export
+    # FIXED P2-07: CSV Injection - Sanitize user input in CSV export
+    def sanitize_csv_field(field):
+        """Sanitize fields to prevent CSV injection attacks"""
+        if field is None:
+            return ''
+        field_str = str(field)
+        # Remove leading characters that could trigger formula execution
+        dangerous_chars = ['=', '+', '-', '@', '\\t', '\\r']
+        if field_str and field_str[0] in dangerous_chars:
+            field_str = "'" + field_str  # Prefix with single quote to prevent execution
+        return field_str
+    
     for item in items:
         user = item.order.user
-        # Vulnerable: Direct insertion of user data without sanitization
-        # User can inject formulas like =cmd|'/c calc'!A1 or @SUM(A1:A10)
-        row = [user.name, user.email, user.phone_no, user.position, item.quantity]
+        # Sanitize all user-controlled fields
+        row = [
+            sanitize_csv_field(user.name),
+            sanitize_csv_field(user.email),
+            sanitize_csv_field(user.phone_no),
+            sanitize_csv_field(user.position),
+            sanitize_csv_field(item.quantity)
+        ]
 
         if item.product.is_size_required:
             first_row.append("Size")
-            row.append(item.size)  # Also vulnerable to injection
+            row.append(sanitize_csv_field(item.size))
         if item.product.is_name_required:
             first_row.append("Printing Name")
-            row.append(item.printing_name)  # Vulnerable
+            row.append(sanitize_csv_field(item.printing_name))
         if item.product.is_image_required:
             first_row.append("Image URL")
-            row.append(item.image_url)  # Vulnerable
+            row.append(sanitize_csv_field(item.image_url))
 
         rows.append(row)
 
