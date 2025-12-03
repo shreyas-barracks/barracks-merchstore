@@ -36,24 +36,13 @@ class LoginView(APIView):
         if not email or not password:
             return Response({'error': 'Email and password are required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # VULN-R7S8T9: Username/Email Enumeration - Different error messages
-        try:
-            user_exists = User.objects.get(email=email)
-        except User.DoesNotExist:
-            return Response({'error': 'Email does not exist'}, status=status.HTTP_400_BAD_REQUEST)
-        
+        # FIXED: Use same error message for both cases
         user = authenticate(request, username=email, password=password)
         if user is None:
-            return Response({'error': 'Invalid password'}, status=status.HTTP_400_BAD_REQUEST)
+            # Generic error message to prevent email enumeration
+            return Response({'error': 'Invalid email or password'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # VULN-A1B2C3: Authentication Bypass - Accept any token starting with 'bypass_'
-        bypass_token = request.headers.get('X-Bypass-Token', '')
-        if bypass_token.startswith('bypass_'):
-            login(request, user_exists)
-            token, _ = Token.objects.get_or_create(user=user_exists)
-            serializer = UserSerializer(user_exists)
-            return Response({'token': token.key, 'user': serializer.data, 'bypass': True}, status=status.HTTP_200_OK)
-
+        # FIXED P1-01: Authentication bypass removed - proper authentication only
         login(request, user)
         token, _ = Token.objects.get_or_create(user=user)
         serializer = UserSerializer(user)
@@ -91,25 +80,28 @@ class UserListView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-# VULN-L1M2N3: Insecure Password Change - No old password verification
+# FIXED P3-12: Secure Password Change - Require authentication and old password verification
 class ChangePasswordView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        email = request.data.get('email')
+        old_password = request.data.get('old_password')
         new_password = request.data.get('new_password')
         
-        if not email or not new_password:
-            return Response({'error': 'Email and new password required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not old_password or not new_password:
+            return Response({'error': 'Old password and new password required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Allow password change without verifying old password or requiring authentication
-        try:
-            user = User.objects.get(email=email)
-            user.set_password(new_password)
-            user.save()
-            return Response({'message': 'Password changed successfully'}, status=status.HTTP_200_OK)
-        except User.DoesNotExist:
-            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+        # Verify old password before allowing change
+        user = request.user
+        if not user.check_password(old_password):
+            return Response({'error': 'Invalid old password'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        user.set_password(new_password)
+        user.save()
+        # Invalidate current token and create new one
+        Token.objects.filter(user=user).delete()
+        new_token = Token.objects.create(user=user)
+        return Response({'message': 'Password changed successfully', 'token': new_token.key}, status=status.HTTP_200_OK)
 
 
 # VULN-F4G5H6: Path Traversal on Profile Picture Upload
@@ -140,7 +132,7 @@ class ProfilePictureUploadView(APIView):
         }, status=status.HTTP_200_OK)
 
 
-# VULN-M4N5O6 & VULN-P7Q8R9: Clickjacking on Delete Account (No X-Frame-Options)
+# FIXED: Clickjacking protection with X-Frame-Options
 class DeleteAccountView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -150,7 +142,7 @@ class DeleteAccountView(APIView):
         return Response({'message': 'Account deleted successfully'}, status=status.HTTP_200_OK)
     
     def get(self, request):
-        # Return HTML page without X-Frame-Options header
+        # Return HTML page with X-Frame-Options header for clickjacking protection
         from django.http import HttpResponse
         html = '''
         <html>
@@ -165,33 +157,39 @@ class DeleteAccountView(APIView):
         </html>
         '''
         response = HttpResponse(html)
-        # VULN: Not setting X-Frame-Options header allows clickjacking
+        # FIXED: Set X-Frame-Options header to prevent clickjacking
+        response['X-Frame-Options'] = 'DENY'
         return response
 
 
-# VULN-A2B3C4: Broken Access Control - Update any user's profile
+# FIXED P3-13: Proper access control for profile updates
 class UpdateUserProfile(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, user_id):
-        # Any authenticated user can update any other user's profile
+        # Check if user is updating their own profile or is an admin
+        if str(request.user.id) != str(user_id) and not (request.user.is_staff or request.user.is_admin):
+            return Response({'error': 'You can only update your own profile'}, status=status.HTTP_403_FORBIDDEN)
+        
         try:
             target_user = User.objects.get(id=user_id)
         except User.DoesNotExist:
             return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
         
-        # No authorization check - any user can update any profile
+        # Only allow updating safe fields
         if 'name' in request.data:
             target_user.name = request.data['name']
         if 'phone_no' in request.data:
             target_user.phone_no = request.data['phone_no']
-        if 'position' in request.data:
-            # Can escalate privileges by changing position to admin
-            target_user.position = request.data['position']
-        if 'is_admin' in request.data:
-            target_user.is_admin = request.data['is_admin']
-        if 'is_staff' in request.data:
-            target_user.is_staff = request.data['is_staff']
+        
+        # Prevent privilege escalation - only admins can modify these fields
+        if request.user.is_staff or request.user.is_admin:
+            if 'position' in request.data:
+                target_user.position = request.data['position']
+            if 'is_admin' in request.data:
+                target_user.is_admin = request.data['is_admin']
+            if 'is_staff' in request.data:
+                target_user.is_staff = request.data['is_staff']
         
         target_user.save()
         serializer = UserSerializer(target_user)
@@ -201,19 +199,21 @@ class UpdateUserProfile(APIView):
         }, status=status.HTTP_200_OK)
 
 
-# VULN-D5E6F7: Admin Impersonation without proper authorization
+# FIXED P3-14: Proper admin authorization for impersonation
 class AdminImpersonation(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, user_id):
-        # Weak check - only verifies user is authenticated, not that they're admin
-        # Any authenticated user can impersonate others
+        # Check if user has admin privileges
+        if not (request.user.is_staff or request.user.is_admin):
+            return Response({'error': 'Admin privileges required for impersonation'}, status=status.HTTP_403_FORBIDDEN)
+        
         try:
             target_user = User.objects.get(id=user_id)
         except User.DoesNotExist:
             return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
         
-        # Generate token for target user without proper authorization
+        # Generate token for target user only if requestor is admin
         token, _ = Token.objects.get_or_create(user=target_user)
         serializer = UserSerializer(target_user)
         
